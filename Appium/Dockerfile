@@ -48,7 +48,8 @@ RUN apt-get -qqy update && \
 #===============
 # Set JAVA_HOME
 #===============
-ENV JAVA_HOME="/usr/lib/jvm/java-11-openjdk-${TARGETARCH:-amd64}" \
+ARG TARGETARCH=amd64
+ENV JAVA_HOME="/usr/lib/jvm/java-17-openjdk-${TARGETARCH}" \
     PATH=$PATH:$JAVA_HOME/bin
 
 #===============================

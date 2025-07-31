@@ -1,7 +1,6 @@
-name: Build & Publish Multi-Arch Appium Image
+name: Multi-Arch Appium Image Builder
 
 on:
-  # Manual trigger (custom tag optional)
   workflow_dispatch:
     inputs:
       tag:
@@ -51,9 +50,9 @@ jobs:
   build:
     needs: prepare
     name: Build (${{ matrix.arch }})
-    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm64' || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     permissions:
       contents: read
@@ -80,7 +79,7 @@ jobs:
           FULL_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}${{ matrix.suffix }}"
           echo "list=$FULL_TAG" | tee -a "$GITHUB_OUTPUT"
 
-      - name: Build & (optional) Push
+      - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: ./Appium
@@ -88,9 +87,15 @@ jobs:
           platforms: ${{ matrix.platform }}
           tags: ${{ steps.tag-list.outputs.list }}
           push: true
+          build-args: |
+            TARGETARCH=${{ matrix.arch }}
           provenance: false
           cache-from: type=registry,ref=ghcr.io/babelcloud/appium:buildcache-${{ matrix.arch }}
           cache-to: type=registry,ref=ghcr.io/babelcloud/appium:buildcache-${{ matrix.arch }},mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/babelcloud/appium
+          annotations: |
+            org.opencontainers.image.source=https://github.com/babelcloud/appium
 
   manifest:
     needs: [prepare, build]

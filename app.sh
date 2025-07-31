@@ -1,6 +1,6 @@
 #!/bin/bash
 
-IMAGE="appium/appium"
+IMAGE="ghcr.io/babelcloud/appium"
 
 if [ -z "$1" ]; then
 	read -p "Task (test|build|push) : " TASK
@@ -17,7 +17,19 @@ fi
 function build() {
 	echo "Build docker image with version \"${VER}\""
 	docker build --no-cache -t ${IMAGE}:${VER} -f Appium/Dockerfile Appium
-	docker images
+	docker images ${IMAGE}:${VER}
+}
+
+function buildx() {
+	echo "Build docker image with version \"${VER}\""
+	docker buildx build \
+	   --platform linux/amd64,linux/arm64 \
+	   --push \
+	   --annotation org.opencontainers.image.source=https://github.com/babelcloud/appium \
+	   -t ${IMAGE}:${VER} \
+	   -f Appium/Dockerfile \
+	   Appium
+	docker images ${IMAGE}:${VER}
 }
 
 function test() {
@@ -35,6 +47,9 @@ function push() {
 case $TASK in
 build)
 	build
+	;;
+buildx)
+	buildx
 	;;
 test)
 	test
