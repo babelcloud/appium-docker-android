@@ -1,0 +1,145 @@
+name: Multi-Arch Appium Image Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (default: commit SHA)"
+        type: string
+        required: false
+        default: ""
+      push:
+        description: "Push image to registry"
+        type: boolean
+        required: false
+        default: false
+  push:
+    branches: ["**"]
+    tags: ["*"]
+  pull_request:
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      tag: ${{ steps.set-tag.outputs.tag }}
+      is_main: ${{ steps.set-tag.outputs.is_main }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: set-tag
+        name: Compute image tag
+        run: |
+          TAG_INPUT='${{ github.event.inputs.tag }}'
+          if [[ -n "$TAG_INPUT" ]]; then
+            TAG="$TAG_INPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF##*/}"
+          else
+            TAG="$(git rev-parse --short HEAD)"
+          fi
+          echo "tag=$TAG" | tee -a "$GITHUB_OUTPUT"
+
+          # detect main branch
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "is_main=true" | tee -a "$GITHUB_OUTPUT"
+          fi
+
+      - id: set-matrix
+        name: Generate build matrix
+        run: |
+          TAG='${{ steps.set-tag.outputs.tag }}'
+          MATRIX=$(jq -nc --arg tag "$TAG" '{include:[{"arch":"amd64","platform":"linux/amd64","suffix":"-amd64","tag":$tag},{"arch":"arm64","platform":"linux/arm64","suffix":"-arm64","tag":$tag}]}')
+          echo "matrix=$MATRIX" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: babelcloud/appium
+      IS_MAIN: ${{ needs.prepare.outputs.is_main }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GH_TOKEN_USER }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - id: tags
+        name: Generate architecture-specific tags
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          TAGS="$IMAGE:${{ matrix.tag }}${{ matrix.suffix }}"
+          if [[ "$IS_MAIN" == "true" ]]; then
+            TAGS="$TAGS,$IMAGE:latest${{ matrix.suffix }}"
+          fi
+          echo "tags=$TAGS" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./Appium
+          file: ./Appium/Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: ${{ steps.tags.outputs.tags }}
+          push: true
+          build-args: |
+            TARGETARCH=${{ matrix.arch }}
+          provenance: false
+          cache-from: type=registry,ref=ghcr.io/babelcloud/appium:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=ghcr.io/babelcloud/appium:buildcache-${{ matrix.arch }},mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/babelcloud/appium
+          annotations: |
+            org.opencontainers.image.source=https://github.com/babelcloud/appium
+
+  manifest:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: babelcloud/appium
+      IS_MAIN: ${{ needs.prepare.outputs.is_main }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GH_TOKEN_USER }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Create & Push Manifest (SHA)
+        uses: ./.github/actions/docker-manifest-create-push
+        with:
+          manifest-list: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
+          manifests: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}-amd64,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}-arm64
+          post-clean: true
+
+      - name: Create & Push Manifest (latest)
+        if: ${{ env.IS_MAIN == 'true' }}
+        uses: ./.github/actions/docker-manifest-create-push
+        with:
+          manifest-list: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          manifests: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-amd64,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-arm64
+          post-clean: true

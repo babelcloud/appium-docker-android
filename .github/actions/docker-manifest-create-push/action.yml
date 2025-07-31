@@ -1,0 +1,29 @@
+name: "Docker Manifest Create & Push"
+description: "Create OCI manifest list for multi-arch images and push to registry"
+author: "babelcloud"
+inputs:
+  manifest-list:
+    description: "Final manifest list name (e.g. ghcr.io/owner/repo:tag)"
+    required: true
+  manifests:
+    description: "Comma separated list of image references to include"
+    required: true
+  post-clean:
+    description: "Remove manifest list locally after push"
+    required: false
+    default: "false"
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        MANIFEST_LIST="${{ inputs.manifest-list }}"
+        MANIFESTS="${{ inputs.manifests }}"
+        IFS=',' read -ra IMAGES <<< "$MANIFESTS"
+        echo "📦 Creating manifest list $MANIFEST_LIST with: ${IMAGES[*]}"
+        docker manifest create "$MANIFEST_LIST" "${IMAGES[@]}"
+        docker manifest push "$MANIFEST_LIST"
+        if [[ "${{ inputs.post-clean }}" == "true" ]]; then
+          docker manifest rm "$MANIFEST_LIST" || true
+        fi
