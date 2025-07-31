@@ -24,7 +24,7 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       tag: ${{ steps.set-tag.outputs.tag }}
-      is_main: ${{ steps.set-tag.outputs.is_main }}
+      is_master: ${{ steps.set-tag.outputs.is_master }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,9 +41,9 @@ jobs:
           fi
           echo "tag=$TAG" | tee -a "$GITHUB_OUTPUT"
 
-          # detect main branch
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-            echo "is_main=true" | tee -a "$GITHUB_OUTPUT"
+          # detect master branch
+          if [[ "${{ github.ref }}" == "refs/heads/master" ]]; then
+            echo "is_master=true" | tee -a "$GITHUB_OUTPUT"
           fi
 
       - id: set-matrix
@@ -66,7 +66,7 @@ jobs:
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: babelcloud/appium
-      IS_MAIN: ${{ needs.prepare.outputs.is_main }}
+      IS_MASTER: ${{ needs.prepare.outputs.is_master }}
     steps:
       - uses: actions/checkout@v4
 
@@ -85,7 +85,7 @@ jobs:
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           TAGS="$IMAGE:${{ matrix.tag }}${{ matrix.suffix }}"
-          if [[ "$IS_MAIN" == "true" ]]; then
+          if [[ "$IS_MASTER" == "true" ]]; then
             TAGS="$TAGS,$IMAGE:latest${{ matrix.suffix }}"
           fi
           echo "tags=$TAGS" | tee -a "$GITHUB_OUTPUT"
@@ -117,7 +117,7 @@ jobs:
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: babelcloud/appium
-      IS_MAIN: ${{ needs.prepare.outputs.is_main }}
+      IS_MASTER: ${{ needs.prepare.outputs.is_master }}
       TAG: ${{ needs.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
@@ -137,7 +137,7 @@ jobs:
           post-clean: true
 
       - name: Create & Push Manifest (latest)
-        if: ${{ env.IS_MAIN == 'true' }}
+        if: ${{ env.IS_MASTER == 'true' }}
         uses: ./.github/actions/docker-manifest-create-push
         with:
           manifest-list: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
