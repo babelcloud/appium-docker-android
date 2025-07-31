@@ -1,0 +1,121 @@
+name: Build & Publish Multi-Arch Appium Image
+
+on:
+  # Manual trigger (custom tag optional)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (default: commit SHA)"
+        type: string
+        required: false
+        default: ""
+      push:
+        description: "Push image to registry"
+        type: boolean
+        required: false
+        default: false
+  push:
+    branches: ["**"]
+    tags: ["*"]
+  pull_request:
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      tag: ${{ steps.set-tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: set-tag
+        name: Compute image tag
+        run: |
+          TAG_INPUT='${{ github.event.inputs.tag }}'
+          if [[ -n "$TAG_INPUT" ]]; then
+            TAG="$TAG_INPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF##*/}"
+          else
+            TAG="$(git rev-parse --short HEAD)"
+          fi
+          echo "tag=$TAG" | tee -a "$GITHUB_OUTPUT"
+
+      - id: set-matrix
+        name: Generate build matrix
+        run: |
+          TAG='${{ steps.set-tag.outputs.tag }}'
+          MATRIX=$(jq -nc --arg tag "$TAG" '{include:[{"arch":"amd64","platform":"linux/amd64","suffix":"-amd64","tag":$tag},{"arch":"arm64","platform":"linux/arm64","suffix":"-arm64","tag":$tag}]}')
+          echo "matrix=$MATRIX" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm64' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: babelcloud/appium
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GH_TOKEN_USER }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - id: tag-list
+        name: Generate architecture-specific tags
+        run: |
+          FULL_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.tag }}${{ matrix.suffix }}"
+          echo "list=$FULL_TAG" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Build & (optional) Push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./Appium
+          file: ./Appium/Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: ${{ steps.tag-list.outputs.list }}
+          push: true
+          provenance: false
+          cache-from: type=registry,ref=ghcr.io/babelcloud/appium:buildcache-${{ matrix.arch }}
+          cache-to: type=registry,ref=ghcr.io/babelcloud/appium:buildcache-${{ matrix.arch }},mode=max
+
+  manifest:
+    needs: [prepare, build]
+    if: ${{ success() && ((github.event_name == 'workflow_dispatch' && github.event.inputs.push == 'true') || startsWith(github.ref, 'refs/tags/')) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: babelcloud/appium
+      TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GH_TOKEN_USER }}
+          password: ${{ secrets.GH_TOKEN }}
+
+      - name: Create & Push Manifest
+        uses: ./.github/actions/docker-manifest-create-push
+        with:
+          manifest-list: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}
+          manifests: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}-amd64,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.TAG }}-arm64
+          post-clean: true
